@@ -1,7 +1,21 @@
-import 'dotenv/config';
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, Type } from '@google/genai/web';
 
 export type DetectedProvider = 'gemini' | 'opencode' | 'openai' | 'groq' | 'none';
+
+/**
+ * Runtime secrets/config. On Cloudflare Workers this is the Workers `env`
+ * binding object; in Node dev it is `process.env`.
+ */
+export interface Env {
+  GEMINI_API_KEY?: string;
+  OPENCODE_API_KEY?: string;
+  ZEN_API_KEY?: string;
+  OPENAI_API_KEY?: string;
+  GROQ_API_KEY?: string;
+  AI_PROVIDER?: string;
+  OPENCODE_MODEL?: string;
+  AI_BASE_URL?: string;
+}
 
 export interface ProviderInfo {
   provider: DetectedProvider;
@@ -25,21 +39,21 @@ export const GEMINI_MODELS = [
  * 3. OpenAI (via sk-... key)
  * 4. Groq (via gsk_... key)
  */
-export function getProviderInfo(): ProviderInfo {
-  const geminiKey = (process.env.GEMINI_API_KEY || '').replace(/^["']|["']$/g, '').trim();
+export function getProviderInfo(env: Env): ProviderInfo {
+  const geminiKey = (env.GEMINI_API_KEY || '').replace(/^["']|["']$/g, '').trim();
   const opencodeKey = (
-    process.env.OPENCODE_API_KEY ||
-    process.env.ZEN_API_KEY ||
+    env.OPENCODE_API_KEY ||
+    env.ZEN_API_KEY ||
     ''
   ).replace(/^["']|["']$/g, '').trim();
-  const openaiKey = (process.env.OPENAI_API_KEY || '').replace(/^["']|["']$/g, '').trim();
-  const groqKey = (process.env.GROQ_API_KEY || '').replace(/^["']|["']$/g, '').trim();
-  const explicitProvider = (process.env.AI_PROVIDER || '').toLowerCase().trim();
+  const openaiKey = (env.OPENAI_API_KEY || '').replace(/^["']|["']$/g, '').trim();
+  const groqKey = (env.GROQ_API_KEY || '').replace(/^["']|["']$/g, '').trim();
+  const explicitProvider = (env.AI_PROVIDER || '').toLowerCase().trim();
 
   // 1. Explicit OpenCode Zen variable or AI_PROVIDER=opencode
   if (opencodeKey || explicitProvider === 'opencode' || explicitProvider === 'zen') {
     const key = opencodeKey || geminiKey;
-    const model = process.env.OPENCODE_MODEL || 'zen-fast';
+    const model = env.OPENCODE_MODEL || 'zen-fast';
     return { provider: 'opencode', key, modelName: `OpenCode Zen (${model})` };
   }
 
@@ -63,13 +77,13 @@ export function getProviderInfo(): ProviderInfo {
   return { provider: 'none', key: '', modelName: 'Demo Fallback Mode' };
 }
 
-export function hasGeminiApiKey(): boolean {
-  const info = getProviderInfo();
+export function hasGeminiApiKey(env: Env): boolean {
+  const info = getProviderInfo(env);
   return info.provider !== 'none';
 }
 
-export function getGeminiClient(): GoogleGenAI | null {
-  const info = getProviderInfo();
+export function getGeminiClient(env: Env): GoogleGenAI | null {
+  const info = getProviderInfo(env);
   if (info.provider !== 'gemini') return null;
 
   return new GoogleGenAI({
@@ -143,7 +157,7 @@ export function withTimeout<T>(
   timeoutMs = SERVER_AI_TIMEOUT_MS,
   operationName = 'AI operation'
 ): Promise<T> {
-  let timer: NodeJS.Timeout;
+  let timer: ReturnType<typeof setTimeout>;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       const err = new Error(`${operationName} timed out after ${timeoutMs / 1000} seconds`);
@@ -174,12 +188,13 @@ function extractJSON(text: string): any {
 }
 
 async function callOpenCodeZen(
+  env: Env,
   key: string,
   preferredModel: string,
   systemPrompt: string,
   userPrompt: string
 ): Promise<string> {
-  const baseUrl = process.env.AI_BASE_URL || 'https://opencode.ai/zen/v1';
+  const baseUrl = env.AI_BASE_URL || 'https://opencode.ai/zen/v1';
   const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
 
   const candidateModels = Array.from(
@@ -264,20 +279,23 @@ async function callOpenAICompatible(
   return extractJSON(content);
 }
 
-export async function analyzeLeadWithAI(lead: {
-  name: string;
-  company: string;
-  email: string;
-  originalMessage: string;
-  source?: string;
-}): Promise<{ data: LeadAnalysisPayload; provider: string; model: string }> {
+export async function analyzeLeadWithAI(
+  env: Env,
+  lead: {
+    name: string;
+    company: string;
+    email: string;
+    originalMessage: string;
+    source?: string;
+  }
+): Promise<{ data: LeadAnalysisPayload; provider: string; model: string }> {
   return withTimeout(
     (async () => {
-      const info = getProviderInfo();
+      const info = getProviderInfo(env);
 
       // 1. OpenCode Zen Engine
       if (info.provider === 'opencode') {
-        const model = process.env.OPENCODE_MODEL || 'zen-fast';
+        const model = env.OPENCODE_MODEL || 'zen-fast';
         const systemPrompt = `You are a sales intelligence system for FlowDesk. Analyze the lead and respond with ONLY valid JSON:
 {
   "intent": "High" | "Medium" | "Low",
@@ -286,7 +304,7 @@ export async function analyzeLeadWithAI(lead: {
   "suggestedAction": "Immediate recommended next step"
 }`;
         const userPrompt = `Lead: ${lead.name}\nCompany: ${lead.company}\nInquiry: "${lead.originalMessage}"`;
-        const raw = await callOpenCodeZen(info.key, model, systemPrompt, userPrompt);
+        const raw = await callOpenCodeZen(env, info.key, model, systemPrompt, userPrompt);
         const parsed = extractJSON(raw);
         return { data: parsed, provider: 'opencode', model: `OpenCode Zen (${model})` };
       }
@@ -323,7 +341,7 @@ export async function analyzeLeadWithAI(lead: {
 
       // 4. Google Gemini Engine (with instant multi-model fallback)
       if (info.provider === 'gemini') {
-        const client = getGeminiClient();
+        const client = getGeminiClient(env);
         if (!client) throw new Error('Gemini client unavailable');
 
         const prompt = `Analyze this inbound lead:
@@ -367,34 +385,37 @@ Inbound Message: "${lead.originalMessage}"`;
   );
 }
 
-export async function generateFollowUpWithAI(params: {
-  lead: {
-    name: string;
-    company: string;
-    originalMessage: string;
-    source?: string;
-    summary?: string;
-    intent?: string;
-    suggestedAction?: string;
-  };
-  tone?: 'Professional' | 'Friendly' | 'Concise';
-  previousMessage?: string;
-}): Promise<{ data: FollowUpPayload; provider: string; model: string }> {
+export async function generateFollowUpWithAI(
+  env: Env,
+  params: {
+    lead: {
+      name: string;
+      company: string;
+      originalMessage: string;
+      source?: string;
+      summary?: string;
+      intent?: string;
+      suggestedAction?: string;
+    };
+    tone?: 'Professional' | 'Friendly' | 'Concise';
+    previousMessage?: string;
+  }
+): Promise<{ data: FollowUpPayload; provider: string; model: string }> {
   return withTimeout(
     (async () => {
-      const info = getProviderInfo();
+      const info = getProviderInfo(env);
       const tone = params.tone || 'Professional';
 
       // 1. OpenCode Zen Engine
       if (info.provider === 'opencode') {
-        const model = process.env.OPENCODE_MODEL || 'zen-fast';
+        const model = env.OPENCODE_MODEL || 'zen-fast';
         const systemPrompt = `You are a sales assistant for FlowDesk writing on behalf of Alex. Write a personalized follow-up message in a ${tone} tone. Return ONLY JSON:
 {
   "message": "The follow-up message body",
   "subject": "Email subject line"
 }`;
         const userPrompt = `Lead Name: ${params.lead.name}\nCompany: ${params.lead.company}\nInquiry: "${params.lead.originalMessage}"\n${params.previousMessage ? `Make this variation distinctly different from: "${params.previousMessage}"` : ''}`;
-        const raw = await callOpenCodeZen(info.key, model, systemPrompt, userPrompt);
+        const raw = await callOpenCodeZen(env, info.key, model, systemPrompt, userPrompt);
 
         let parsed: FollowUpPayload;
         try {
@@ -439,7 +460,7 @@ export async function generateFollowUpWithAI(params: {
 
       // 4. Google Gemini Engine (with instant multi-model fallback)
       if (info.provider === 'gemini') {
-        const client = getGeminiClient();
+        const client = getGeminiClient(env);
         if (!client) throw new Error('Gemini client unavailable');
 
         const prompt = `Write a personalized follow-up response to this prospect:

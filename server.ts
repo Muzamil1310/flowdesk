@@ -19,7 +19,7 @@ app.use(express.json());
 
 // API Status & Observability Endpoint
 app.get('/api/health', (_req, res) => {
-  const info = getProviderInfo();
+  const info = getProviderInfo(process.env);
   res.json({
     status: 'ok',
     uptime: Math.floor(process.uptime()),
@@ -39,7 +39,7 @@ app.post('/api/analyze-lead', async (req, res) => {
       return res.status(400).json({ error: 'Lead information with name and message is required.' });
     }
 
-    const info = getProviderInfo();
+    const info = getProviderInfo(process.env);
     if (info.provider === 'none') {
       return res.json({
         fallback: true,
@@ -49,7 +49,7 @@ app.post('/api/analyze-lead', async (req, res) => {
     }
 
     try {
-      const result = await analyzeLeadWithAI(lead);
+      const result = await analyzeLeadWithAI(process.env, lead);
       return res.json({
         fallback: false,
         mode: result.provider,
@@ -86,7 +86,7 @@ app.post('/api/generate-followup', async (req, res) => {
       return res.status(400).json({ error: 'Lead information is required.' });
     }
 
-    const info = getProviderInfo();
+    const info = getProviderInfo(process.env);
     if (info.provider === 'none') {
       return res.json({
         fallback: true,
@@ -96,7 +96,7 @@ app.post('/api/generate-followup', async (req, res) => {
     }
 
     try {
-      const result = await generateFollowUpWithAI({ lead, tone, previousMessage });
+      const result = await generateFollowUpWithAI(process.env, { lead, tone, previousMessage });
       return res.json({
         fallback: false,
         mode: result.provider,
