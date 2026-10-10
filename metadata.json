@@ -1,0 +1,6 @@
+{
+  "name": "FlowDesk",
+  "description": "AI-powered lead follow-up platform for small businesses. Phase 1 foundation and design system.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
